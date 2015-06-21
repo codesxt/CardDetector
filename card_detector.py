@@ -56,13 +56,24 @@ while cap.isOpened():
 
 		# An homography is calculated to obtain the perspective transform
 		M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+		M2, mask2 = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
 		matchesMask = mask.ravel().tolist()
-		h,w = template.shape
+		h, w = template.shape
 		pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
 
 		# The perspective from the matched points is transformed according
 		# to the homography matrix M and contours are drawn over the input image
 		dst = cv2.perspectiveTransform(pts,M)
+
+		corners = [[dst[i][0][0], dst[i][0][1]] for i in range(len(dst))]
+		topLeft = [min([corners[i][0] for i in range(len(corners))]), min([corners[i][1] for i in range(len(corners))])]
+		bottomRight = [max([corners[i][0] for i in range(len(corners))]), max([corners[i][1] for i in range(len(corners))])]
+
+		#card = img[topLeft[1]:bottomRight[1], topLeft[0]:bottomRight[0]]
+		#cv2.imshow('Detected', card)
+		card = cv2.warpPerspective(img, M2, (img.shape[1], img.shape[0]))
+		card = card[0:h-1, 0:w-1]
+		cv2.imshow('Rectified Image', card)
 		cv2.polylines(img,[np.int32(dst)],True,255,3, cv2.CV_AA)
 	else:
 		print "Not enough matches are found - %d/%d" % (len(good),MIN_MATCH_COUNT)
