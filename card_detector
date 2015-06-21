@@ -1,3 +1,4 @@
+#!/usr/bin/python
 # A card detector using OpenCV and Python
 # This code uses ORB to extract features and BRIEF to compute descriptors
 # OpenCV Version: 2.4.9
@@ -5,6 +6,9 @@
 
 import numpy as np
 import cv2
+import sys
+import zbar
+from PIL import Image
 
 # Sets the minimum of matches required to consider the card as detected
 MIN_MATCH_COUNT = 25
@@ -28,6 +32,10 @@ tpl_keypoints = detector.detect(template)
 # A matcher object is initialized to match features from the webcam
 # input with the template image features
 matcher = cv2.DescriptorMatcher_create('BruteForce-Hamming')
+
+# A ZBar barcode scanner is initialized
+scanner = zbar.ImageScanner()
+scanner.parse_config('enable')
 
 while cap.isOpened():
 	ret, img = cap.read()
@@ -64,23 +72,51 @@ while cap.isOpened():
 		# The perspective from the matched points is transformed according
 		# to the homography matrix M and contours are drawn over the input image
 		dst = cv2.perspectiveTransform(pts,M)
+		cv2.polylines(img,[np.int32(dst)],True,255,3, cv2.CV_AA)
 
-		corners = [[dst[i][0][0], dst[i][0][1]] for i in range(len(dst))]
-		topLeft = [min([corners[i][0] for i in range(len(corners))]), min([corners[i][1] for i in range(len(corners))])]
-		bottomRight = [max([corners[i][0] for i in range(len(corners))]), max([corners[i][1] for i in range(len(corners))])]
-
-		#card = img[topLeft[1]:bottomRight[1], topLeft[0]:bottomRight[0]]
-		#cv2.imshow('Detected', card)
+		# The card image is rectified using the M2 homography matrix
 		card = cv2.warpPerspective(img, M2, (img.shape[1], img.shape[0]))
 		card = card[0:h-1, 0:w-1]
 		cv2.imshow('Rectified Image', card)
-		cv2.polylines(img,[np.int32(dst)],True,255,3, cv2.CV_AA)
+
+		# The barcode is extracted using measurements from the barcode location in the
+		# template file
+		barcode = card[240:289, 180:370]
+		numbers = card[268:283, 233:316]
+		barcode = cv2.resize(barcode, (0,0), fx=4, fy=4)
+
+		barcode = cv2.adaptiveThreshold(barcode,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
+		numbers = cv2.adaptiveThreshold(numbers,255,cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,7,2)
+		kernel = cv2.getStructuringElement(cv2.MORPH_CROSS,(3,3))
+		#numbers = cv2.erode(numbers, kernel, iterations = 1)
+		numbers = cv2.resize(numbers, (0,0), fx=4, fy=4)
+		(num_y, num_x) = numbers.shape
+		nums = [numbers[0:num_y-1, (num_x/8*i):(num_x/8*(i+1))-1] for i in range(8)]
+		for i in range(8):
+			name = "Digit %d" % i
+			cv2.imshow(name, nums[i])
+		cv2.imshow('Barcode', barcode)
+		cv2.imshow('Barcode', numbers)
+
+		# I dunno shit
+		#(width, height) = barcode.shape
+		#raw = barcode.tostring()
+		#image = zbar.Image(width, height, 'Y800', raw)
+		#scanner.scan(image)
+		#if image > 0:
+			#for symbol in image:
+				#print 'decoded', symbol.type, 'symbol', '"%s"' % symbol.data
+
+		# Prints to console that a card has been detected
+		print 'A card has been detected              \r',
+		sys.stdout.flush()
 	else:
-		print "Not enough matches are found - %d/%d" % (len(good),MIN_MATCH_COUNT)
+		# Prints to console that not enough matches have been found
+		print 'Not enough matches are found - %3d/%3d\r' % (len(good),MIN_MATCH_COUNT),
+		sys.stdout.flush()
 		matchesMask = None
 
-
-	cv2.imshow('Template', template)
+	#cv2.imshow('Template', template)
 	cv2.imshow('Card Detection', img)
 	if cv2.waitKey(1) & 0xFF == ord('q'):
 		break
