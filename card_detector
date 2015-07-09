@@ -8,11 +8,10 @@
 import numpy as np
 import cv2
 import sys
-import zbar
-from PIL import Image
+from espeak import espeak
 
 # Sets the minimum of matches required to consider the card as detected
-MIN_MATCH_COUNT = 25
+MIN_MATCH_COUNT = 40
 
 # Configures input from the webcam and opens the template file to detect
 # It sets the template as grayscale to make the processing faster
@@ -20,6 +19,23 @@ cap = cv2.VideoCapture(0)
 template_file = "template.png"
 template = cv2.imread(template_file)
 template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+#Cards List
+card_files = [
+	"cards/tne.png",
+	"cards/crut.png",
+	"cards/cnet.png",
+	"cards/creducm.png",
+	"cards/lic.png"
+]
+
+card_names = [
+	"Tarjeta Nacional Estudiantil",
+	"Cuenta rut",
+	"Carnet de Identidad",
+	"Credencial Universidad Católica del Maule",
+	"Licencia de Conducir"
+]
 
 # Initializes feature detector as ORB and feature descriptor as BRIEF
 detector = cv2.FeatureDetector_create("ORB")
@@ -30,27 +46,27 @@ descriptor = cv2.DescriptorExtractor_create("BRIEF")
 tpl_keypoints = detector.detect(template)
 (tpl_keypoints, tpl_descriptors) = descriptor.compute(template, tpl_keypoints)
 
+card_keypoints = []
+card_descriptors = []
+
+for i in range(len(card_files)):
+	tmp_image = cv2.imread(card_files[i])
+	tmp_image = cv2.cvtColor(tmp_image, cv2.COLOR_BGR2GRAY)
+
+	tmp_keypoints = detector.detect(tmp_image)
+	(tmp_keypoints, tmp_descriptors) = descriptor.compute(tmp_image, tmp_keypoints)
+
+	card_keypoints.append(tmp_keypoints)
+	card_descriptors.append(tmp_descriptors)
+
 # A matcher object is initialized to match features from the webcam
 # input with the template image features
 matcher = cv2.DescriptorMatcher_create('BruteForce-Hamming')
 
-# A ZBar barcode scanner is initialized
-scanner = zbar.ImageScanner()
-scanner.parse_config('enable')
+#Sets voice synthesizer language
+espeak.set_voice('spanish-latin-am')
 
-# Opens the template for digit detection
-digits_template = cv2.imread("numbers_template.jpg")
-digits_template = cv2.cvtColor(digits_template, cv2.COLOR_BGR2GRAY)
-# Numbers image is inverted
-digits_template = abs(255-digits_template)
-#digits_template = cv2.adaptiveThreshold(digits_template,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,7,2)
-kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(3,3))
-digits_template = cv2.dilate(digits_template, kernel, iterations = 1)
-(dig_y, dig_x) = digits_template.shape
-digits = [digits_template[0:dig_y, (dig_x/10*i):(dig_x/10*(i+1))] for i in range(10)]
-
-cv2.imshow("Digits", digits_template)
-
+last_detected = -1
 while cap.isOpened():
 	ret, img = cap.read()
 
@@ -62,95 +78,52 @@ while cap.isOpened():
 	# descriptors from the image and matches them to the template descriptors
 	img_keypoints = detector.detect(img)
 	(img_keypoints, img_descriptors) = descriptor.compute(img, img_keypoints)
-	matches = matcher.match(tpl_descriptors, img_descriptors)
 
-	# This stage extracts the best matches from the poorer ones
-	dist = [m.distance for m in matches]
-	thres_dist = (sum(dist) / len(dist)) * 0.6
-	good = [m for m in matches if m.distance < thres_dist]
+	for i in range(len(card_files)):
+		matches = matcher.match(card_descriptors[i], img_descriptors)
 
-	# If the best matches are more than the MIN_MATCH_COUNT variable, then a card is
-	# detected
-	if len(good) > MIN_MATCH_COUNT:
-		# The points of matched features are stored in numpy arrays
-		src_pts = np.float32([ tpl_keypoints[m.queryIdx].pt for m in good ]).reshape(-1,1,2)
-		dst_pts = np.float32([ img_keypoints[m.trainIdx].pt for m in good ]).reshape(-1,1,2)
+		# This stage extracts the best matches from the poorer ones
+		dist = [m.distance for m in matches]
+		thres_dist = (sum(dist) / len(dist)) * 0.5
+		good = [m for m in matches if m.distance < thres_dist]
 
-		# An homography is calculated to obtain the perspective transform
-		M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-		M2, mask2 = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-		matchesMask = mask.ravel().tolist()
-		h, w = template.shape
-		pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
+		# If the best matches are more than the MIN_MATCH_COUNT variable, then a card is
+		# detected
+		if len(good) > MIN_MATCH_COUNT:
+			if i != last_detected:
+				print "Has detectado la tarjeta:",card_names[i]
+				espeak.synth(card_names[i])
+				last_detected = i
+			# The points of matched features are stored in numpy arrays
+			src_pts = np.float32([ card_keypoints[i][m.queryIdx].pt for m in good ]).reshape(-1,1,2)
+			dst_pts = np.float32([ img_keypoints[m.trainIdx].pt for m in good ]).reshape(-1,1,2)
 
-		# The perspective from the matched points is transformed according
-		# to the homography matrix M and contours are drawn over the input image
-		dst = cv2.perspectiveTransform(pts,M)
-		cv2.polylines(img,[np.int32(dst)],True,255,3, cv2.CV_AA)
+			# An homography is calculated to obtain the perspective transform
+			M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+			M2, mask2 = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+			matchesMask = mask.ravel().tolist()
+			h, w = template.shape
+			pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
 
-		# The card image is rectified using the M2 homography matrix
-		card = cv2.warpPerspective(img, M2, (img.shape[1], img.shape[0]))
-		card = card[0:h-1, 0:w-1]
+			# The perspective from the matched points is transformed according
+			# to the homography matrix M and contours are drawn over the input image
+			dst = cv2.perspectiveTransform(pts,M)
+			cv2.polylines(img,[np.int32(dst)],True,255,3, cv2.CV_AA)
 
-		# The barcode is extracted using measurements from the barcode location in the
-		# template file
-		barcode = card[240:289, 180:370]
-		numbers = card[268:283, 233:316]
-		barcode = cv2.resize(barcode, (0,0), fx=4, fy=4)
+			# The card image is rectified using the M2 homography matrix
+			card = cv2.warpPerspective(img, M2, (img.shape[1], img.shape[0]))
+			card = card[0:h-1, 0:w-1]
 
-		# Umbralización adaptativa sobre el código de barras
-		#barcode = cv2.adaptiveThreshold(barcode,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
+			cv2.imshow('Rectified Image', card)
 
-		# Numbers image is inverted
-		numbers = abs(255-numbers)
-
-		numbers = cv2.adaptiveThreshold(numbers,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,3,0)
-		numbers = cv2.resize(numbers, (0,0), fx=4, fy=4)
-		cv2.imshow('Preprocesed Numbers', numbers)
-		cv2.imshow('Barcode', barcode)
-		kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(3,3))
-		numbers = cv2.erode(numbers, kernel, iterations = 3)
-		numbers = cv2.dilate(numbers, kernel, iterations = 1)
-
-		(num_y, num_x) = numbers.shape
-		nums = [numbers[0:num_y, (num_x/8*i):(num_x/8*(i+1))-1] for i in range(8)]
-
-		# The detection accuracy is calculated
-		detected = [-1, -1, -1, -1, -1, -1, -1, -1]
-		for i in range(8):
-			score = [sum(sum(nums[i]==digits[j])) for j in range(len(digits))]
-			best_score = max(score)
-			index = score.index(best_score)
-			detected[i] = index
-
-		original = [8,3,6,6,7,7,3,9]
-		#original = [8,3,6,6,7,8,0,4]
-		acc = [1 if original[i] == detected[i] else 0 for i in range(len(original))]
-		print detected, "Accuracy: ", float(sum(acc))/len(original)*100.0
-			#name = "Digit %d" % i
-			#cv2.imshow(name, nums[i])
-
-		cv2.imshow('Rectified Image', card)
-		cv2.imshow('Barcode', barcode)
-		cv2.imshow('Numbers', numbers)
-
-		# I dunno shit
-		#(width, height) = barcode.shape
-		#raw = barcode.tostring()
-		#image = zbar.Image(width, height, 'Y800', raw)
-		#scanner.scan(image)
-		#if image > 0:
-			#for symbol in image:
-				#print 'decoded', symbol.type, 'symbol', '"%s"' % symbol.data
-
-		# Prints to console that a card has been detected
-		#print 'A card has been detected              \r',
-		sys.stdout.flush()
-	else:
-		# Prints to console that not enough matches have been found
-		print 'Not enough matches are found - %3d/%3d\r' % (len(good),MIN_MATCH_COUNT),
-		sys.stdout.flush()
-		matchesMask = None
+			# Prints to console that a card has been detected
+			#print 'A card has been detected              \r',
+			sys.stdout.flush()
+		else:
+			# Prints to console that not enough matches have been found
+			print 'Not enough matches are found - %3d/%3d\r' % (len(good),MIN_MATCH_COUNT),
+			sys.stdout.flush()
+			matchesMask = None
 
 	cv2.imshow('Template', template)
 	cv2.imshow('Card Detection', img)
