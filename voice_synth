@@ -1,0 +1,12 @@
+#!/usr/bin/python
+# -*- coding: utf8 -*-
+from espeak import espeak
+
+espeak.set_voice('spanish-latin-am')
+
+while True:
+	user_input = raw_input('Ingrese texto: ')
+	if user_input == "":
+		exit(0)
+	else:
+		espeak.synth(user_input)

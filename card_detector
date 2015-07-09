@@ -1,4 +1,5 @@
 #!/usr/bin/python
+# -*- coding: utf8 -*-
 # A card detector using OpenCV and Python
 # This code uses ORB to extract features and BRIEF to compute descriptors
 # OpenCV Version: 2.4.9
@@ -36,6 +37,19 @@ matcher = cv2.DescriptorMatcher_create('BruteForce-Hamming')
 # A ZBar barcode scanner is initialized
 scanner = zbar.ImageScanner()
 scanner.parse_config('enable')
+
+# Opens the template for digit detection
+digits_template = cv2.imread("numbers_template.jpg")
+digits_template = cv2.cvtColor(digits_template, cv2.COLOR_BGR2GRAY)
+# Numbers image is inverted
+digits_template = abs(255-digits_template)
+#digits_template = cv2.adaptiveThreshold(digits_template,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,7,2)
+kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(3,3))
+digits_template = cv2.dilate(digits_template, kernel, iterations = 1)
+(dig_y, dig_x) = digits_template.shape
+digits = [digits_template[0:dig_y, (dig_x/10*i):(dig_x/10*(i+1))] for i in range(10)]
+
+cv2.imshow("Digits", digits_template)
 
 while cap.isOpened():
 	ret, img = cap.read()
@@ -77,7 +91,6 @@ while cap.isOpened():
 		# The card image is rectified using the M2 homography matrix
 		card = cv2.warpPerspective(img, M2, (img.shape[1], img.shape[0]))
 		card = card[0:h-1, 0:w-1]
-		cv2.imshow('Rectified Image', card)
 
 		# The barcode is extracted using measurements from the barcode location in the
 		# template file
@@ -85,18 +98,41 @@ while cap.isOpened():
 		numbers = card[268:283, 233:316]
 		barcode = cv2.resize(barcode, (0,0), fx=4, fy=4)
 
-		barcode = cv2.adaptiveThreshold(barcode,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
-		numbers = cv2.adaptiveThreshold(numbers,255,cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,7,2)
-		kernel = cv2.getStructuringElement(cv2.MORPH_CROSS,(3,3))
-		#numbers = cv2.erode(numbers, kernel, iterations = 1)
+		# Umbralización adaptativa sobre el código de barras
+		#barcode = cv2.adaptiveThreshold(barcode,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
+
+		# Numbers image is inverted
+		numbers = abs(255-numbers)
+
+		numbers = cv2.adaptiveThreshold(numbers,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,3,0)
 		numbers = cv2.resize(numbers, (0,0), fx=4, fy=4)
-		(num_y, num_x) = numbers.shape
-		nums = [numbers[0:num_y-1, (num_x/8*i):(num_x/8*(i+1))-1] for i in range(8)]
-		for i in range(8):
-			name = "Digit %d" % i
-			cv2.imshow(name, nums[i])
+		cv2.imshow('Preprocesed Numbers', numbers)
 		cv2.imshow('Barcode', barcode)
-		cv2.imshow('Barcode', numbers)
+		kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(3,3))
+		numbers = cv2.erode(numbers, kernel, iterations = 3)
+		numbers = cv2.dilate(numbers, kernel, iterations = 1)
+
+		(num_y, num_x) = numbers.shape
+		nums = [numbers[0:num_y, (num_x/8*i):(num_x/8*(i+1))-1] for i in range(8)]
+
+		# The detection accuracy is calculated
+		detected = [-1, -1, -1, -1, -1, -1, -1, -1]
+		for i in range(8):
+			score = [sum(sum(nums[i]==digits[j])) for j in range(len(digits))]
+			best_score = max(score)
+			index = score.index(best_score)
+			detected[i] = index
+
+		original = [8,3,6,6,7,7,3,9]
+		#original = [8,3,6,6,7,8,0,4]
+		acc = [1 if original[i] == detected[i] else 0 for i in range(len(original))]
+		print detected, "Accuracy: ", float(sum(acc))/len(original)*100.0
+			#name = "Digit %d" % i
+			#cv2.imshow(name, nums[i])
+
+		cv2.imshow('Rectified Image', card)
+		cv2.imshow('Barcode', barcode)
+		cv2.imshow('Numbers', numbers)
 
 		# I dunno shit
 		#(width, height) = barcode.shape
@@ -108,7 +144,7 @@ while cap.isOpened():
 				#print 'decoded', symbol.type, 'symbol', '"%s"' % symbol.data
 
 		# Prints to console that a card has been detected
-		print 'A card has been detected              \r',
+		#print 'A card has been detected              \r',
 		sys.stdout.flush()
 	else:
 		# Prints to console that not enough matches have been found
@@ -116,7 +152,7 @@ while cap.isOpened():
 		sys.stdout.flush()
 		matchesMask = None
 
-	#cv2.imshow('Template', template)
+	cv2.imshow('Template', template)
 	cv2.imshow('Card Detection', img)
 	if cv2.waitKey(1) & 0xFF == ord('q'):
 		break
